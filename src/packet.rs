@@ -1,6 +1,6 @@
 use serde::Deserialize;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 pub enum S2C {
     ConnectNotification(ConnectNotification),
     DisconnectNotification(DisconnectNotification),
@@ -9,12 +9,12 @@ pub enum S2C {
     Skip,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 pub struct ConnectNotification {
     pub id: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 pub struct DisconnectNotification {
     pub id: String,
 }

@@ -1,12 +1,16 @@
 use clap::Parser;
 use colored::Colorize;
 use packet::S2C;
+use promptly::prompt;
 use spinners::{Spinner, Spinners};
 use std::{
     collections::VecDeque,
-    sync::{Arc, Mutex}, process::exit, time::Duration,
+    net::TcpStream,
+    process::exit,
+    sync::{Arc, Mutex},
+    time::Duration,
 };
-use tungstenite::{connect, Message};
+use tungstenite::{connect, stream::MaybeTlsStream, Message, WebSocket};
 use vlc::{Event, EventType, Instance, Media, MediaPlayer, State};
 use youtube_dl::YoutubeDl;
 
@@ -15,45 +19,30 @@ mod packet;
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
-    #[arg(long, value_name = "USERNAME")]
     id: String,
+    #[arg(short, long)]
+    debug: bool,
 }
 
 const DTP_SERVER: &str = "wss://dtp-server.shuttleapp.rs";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
-    let url = url::Url::parse(&format!("{}/{}", DTP_SERVER, cli.id)).unwrap();
-    let mut sp = Spinner::new(
-        Spinners::Dots12,
-        format!(
-            "[{}] Connecting to DTP server at {} with ID: {}",
-            "INFO".bold().blue(),
-            DTP_SERVER.bold(),
-            cli.id.bold()
-        ),
-    );
-    let con = connect(url);
-    if con.is_err() {
-        sp.stop_with_message(format!("[{}] Failed to connect", "ERROR".bold().red()));
-        exit(1);
-    }
-    let (socket, _) = con.unwrap();
-    let socket = Arc::new(Mutex::new(socket));
-
-    sp.stop_with_message(format!(
-        "[{}] Connected to DTP server",
-        "INFO".bold().blue()
-    ));
 
     let instance = Instance::new().unwrap();
     let mdp = MediaPlayer::new(&instance).unwrap();
+    let _queue: VecDeque<String> = VecDeque::new();
+
+    let socket = connect_ws(DTP_SERVER, &cli.id);
 
     socket
         .lock()
         .unwrap()
         .send(Message::Text("\"Ready1\"".into()))
         .unwrap();
+
+    user_in(socket.clone());
+
     loop {
         std::thread::sleep(Duration::from_millis(10));
         if socket.lock().unwrap().can_read() {
@@ -63,6 +52,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             match msg {
                 Message::Text(t) => {
                     let msg = serde_json::from_str::<S2C>(&t).unwrap();
+                    if cli.debug {
+                        println!("[{}] S2C {{ {:?} }}", "DEBUG".bold(), msg)
+                    }
                     match msg {
                         S2C::ConnectNotification(notif) => {
                             if notif.id != cli.id {
@@ -134,7 +126,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     .send(Message::Text("\"Playing\"".into()))
                                                     .unwrap();
                                             }
-                                            State::Stopped => {
+                                            State::Ended => {
                                                 println!(
                                                     "[{}] Current media stopped/ended",
                                                     "INFO".blue().bold()
@@ -176,4 +168,56 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+}
+
+fn connect_ws(dtp_url: &str, id: &str) -> Arc<Mutex<WebSocket<MaybeTlsStream<TcpStream>>>> {
+    let url = url::Url::parse(&format!("{}/{}", dtp_url, id)).unwrap();
+    let mut sp = Spinner::new(
+        Spinners::Dots12,
+        format!(
+            "[{}] Connecting to DTP server at {} with ID: {}",
+            "INFO".bold().blue(),
+            DTP_SERVER.bold(),
+            id.bold()
+        ),
+    );
+    let con = connect(url);
+    if con.is_err() {
+        sp.stop_with_message(format!("[{}] Failed to connect", "ERROR".bold().red()));
+        exit(1);
+    }
+    let (socket, _) = con.unwrap();
+    let socket = Arc::new(Mutex::new(socket));
+
+    sp.stop_with_message(format!(
+        "[{}] Connected to DTP server",
+        "INFO".bold().blue()
+    ));
+
+    socket
+}
+
+fn user_in(socket: Arc<Mutex<WebSocket<MaybeTlsStream<TcpStream>>>>) {
+    std::thread::spawn(move || loop {
+        let i: String = prompt("").unwrap();
+        if i.starts_with("play ") {
+            let link = i.replace("play ", "");
+            socket
+                .lock()
+                .unwrap()
+                .send(Message::Text(format!(
+                    "{{\"Play\":{{\"yt_link\":\"{}\"}}}}",
+                    link
+                )))
+                .unwrap();
+        } else if i == "skip" {
+            socket
+                .lock()
+                .unwrap()
+                .send(Message::Text("\"Skip\"".into()))
+                .unwrap();
+        } else {
+            eprintln!("[{}] Unrecognised input", "ERROR".red().bold());
+        }
+    });
 }
