@@ -8,6 +8,7 @@ use std::{
     net::TcpStream,
     process::exit,
     sync::{Arc, Mutex},
+    thread::JoinHandle,
     time::Duration,
 };
 use tungstenite::{connect, stream::MaybeTlsStream, Message, WebSocket};
@@ -41,7 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .send(Message::Text("\"Ready1\"".into()))
         .unwrap();
 
-    user_in(socket.clone());
+    let _input_thread = user_in(socket.clone());
 
     loop {
         std::thread::sleep(Duration::from_millis(10));
@@ -152,6 +153,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         S2C::Skip => {
                             println!("[{}] Skipping media", "INFO".blue().bold());
                             mdp.stop();
+                            socket
+                                .lock()
+                                .unwrap()
+                                .send(Message::Text("\"Ready1\"".into()))
+                                .unwrap();
                         }
                     }
                 }
@@ -197,9 +203,13 @@ fn connect_ws(dtp_url: &str, id: &str) -> Arc<Mutex<WebSocket<MaybeTlsStream<Tcp
     socket
 }
 
-fn user_in(socket: Arc<Mutex<WebSocket<MaybeTlsStream<TcpStream>>>>) {
-    std::thread::spawn(move || loop {
-        let i: String = prompt("").unwrap();
+fn user_in(socket: Arc<Mutex<WebSocket<MaybeTlsStream<TcpStream>>>>) -> JoinHandle<()> {
+    let handle: JoinHandle<()> = std::thread::spawn(move || loop {
+        let i = prompt::<String, &str>("");
+        if i.is_err() {
+            break;
+        }
+        let i = i.unwrap();
         if i.starts_with("play ") {
             let link = i.replace("play ", "");
             socket
@@ -220,4 +230,5 @@ fn user_in(socket: Arc<Mutex<WebSocket<MaybeTlsStream<TcpStream>>>>) {
             eprintln!("[{}] Unrecognised input", "ERROR".red().bold());
         }
     });
+    handle
 }
